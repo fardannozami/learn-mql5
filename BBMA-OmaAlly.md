@@ -4,20 +4,26 @@ Study notes for coding BBMA (Bollinger Bands + Moving Average), the method by Om
 
 **Current scope: XAUUSD only.** One indicator that marks signals on the chart so they can be verified by hand, and one EA that trades the same signals. Both use the same signal engine, so what you see on the chart is exactly what the EA trades.
 
-> Terms and exact rules vary between BBMA teachers and communities. These notes describe the commonly taught version; verify against your own course material before trading. Not financial advice.
+**Reference:** *SIGNAL IDENTIFICATION BBMA OMA ALLY.pdf* (BBMA Oma Ally Analyzer Dashboard EA V4.50 guidebook), in
+`../BBMA/november/BBMA Oma ally Analyzer Dashboard EA V4.50/BBMA Oma Ally Analyzer Dashboard EA/GUIDEBOOK/English/`.
+Rule text in quotes below is from the guidebook (Malay words translated). Anything marked *(interpretation)* is my reading of its chart examples and should be checked.
+
+> Not financial advice. Verify every rule against the chart before trading real money.
 
 ---
 
 ## 1. Indicator setup
 
-| Component | Period | Method | Applied to | Notes |
+| Component | Period | Method | Applied to | Chart colour (guidebook) |
 |---|---|---|---|---|
-| Bollinger Bands | 20 | SMA | Close | Deviation 2 → **BB Top**, **BB Mid**, **BB Low** |
-| MA5 High | 5 | LWMA | High | Fast upper MA |
-| MA10 High | 10 | LWMA | High | Slow upper MA |
-| MA5 Low | 5 | LWMA | Low | Fast lower MA |
-| MA10 Low | 10 | LWMA | Low | Slow lower MA |
-| EMA 50 | 50 | EMA | Close | Trend filter |
+| Bollinger Bands | 20 | SMA | Close | Green – **Upper BB**, **Mid BB**, **Lower BB** (deviation 2) |
+| MA5 High | 5 | LWMA | High | Red |
+| MA10 High | 10 | LWMA | High | Red |
+| MA5 Low | 5 | LWMA | Low | Blue |
+| MA10 Low | 10 | LWMA | Low | Blue |
+| EMA 50 | 50 | EMA | Close | Cyan / white |
+
+The guidebook charts also draw dotted lines between MA5 and MA10 as a visual fill; they aren't part of the rules.
 
 ### MQL5 handles
 
@@ -28,106 +34,155 @@ int hMA10H = iMA(_Symbol, _Period, 10, 0, MODE_LWMA, PRICE_HIGH);
 int hMA5L  = iMA(_Symbol, _Period, 5,  0, MODE_LWMA, PRICE_LOW);
 int hMA10L = iMA(_Symbol, _Period, 10, 0, MODE_LWMA, PRICE_LOW);
 int hEMA50 = iMA(_Symbol, _Period, 50, 0, MODE_EMA,  PRICE_CLOSE);
-// iBands buffers: 0 = BASE_LINE (mid), 1 = UPPER_BAND (top), 2 = LOWER_BAND (low)
+// iBands buffers: 0 = BASE_LINE (mid), 1 = UPPER_BAND, 2 = LOWER_BAND
 ```
 
 Always evaluate on **closed candles** (shift 1 and older), never on the live candle (shift 0).
 
 ---
 
-## 2. Core signals
+## 2. Single-timeframe signals
 
-### 2.1 Extreme
-The first warning of a possible reversal: the MAs stretch outside the Bollinger Band.
+Chart labels used by the guidebook / dashboard: **CSE / EXT** (extreme), **TPW**, **MHV**, **CSAK**, **CSM**, **Dir** (direction), **Re** (re-entry), **MA50** (rejected EMA 50), **Gap**, **FS** (full setup).
 
-- **Sell Extreme:** MA5 High and/or MA10 High closes **above BB Top**.
-- **Buy Extreme:** MA5 Low and/or MA10 Low closes **below BB Low**.
-- The candle should close back **inside** the band, not ride outside it.
-- An extreme alone is **not** an entry; it marks a zone to watch.
+### 2.1 Extreme (CSE / EXT)
+| Buy | Sell |
+|---|---|
+| "MA5/10 Low **below** Lower BB" | "MA5/10 High **above** Upper BB" |
+| "there is a **reversal candle**" | "there is a **reversal candle**" |
 
-```text
-SellExtreme[i] = (MA5H[i] > BBTop[i] || MA10H[i] > BBTop[i]) && Close[i] <= BBTop[i]
-BuyExtreme[i]  = (MA5L[i] < BBLow[i] || MA10L[i] < BBLow[i]) && Close[i] >= BBLow[i]
-```
-
-### 2.2 MHV – Market Hilang Volume ("market loses volume")
-After an extreme, price returns to test the same band but **fails** to push out again.
-
-- **Sell MHV:** after a Sell Extreme, price returns near BB Top but the candle does **not** close above it, and the MAs do not make a new extreme.
-- **Buy MHV:** the mirror case at BB Low.
-- Shows the move is losing strength. It's a sign that reversal is getting more likely.
-
-### 2.3 CSAK – Candlestick Arah Kukuh ("strong direction candle")
-The candle that confirms the change of direction.
-
-- **Sell CSAK:** a bearish candle that closes **below BB Mid** and **below MA5/MA10** (ideally also below EMA 50).
-- **Buy CSAK:** a bullish candle that closes **above BB Mid** and **above MA5/MA10** (ideally also above EMA 50).
-- Strongest when it follows Extreme → MHV.
+An extreme is a warning that the move is stretched, not an entry.
 
 ```text
-BuyCSAK[i]  = Close[i] > Open[i] && Close[i] > BBMid[i]
-              && Close[i] > MA5H[i] && Close[i] > MA10H[i]
-              && Open[i] < BBMid[i]                 // body crosses the mid band
-SellCSAK[i] = Close[i] < Open[i] && Close[i] < BBMid[i]
-              && Close[i] < MA5L[i] && Close[i] < MA10L[i]
-              && Open[i] > BBMid[i]
+BuyExtreme  = (MA5L < LowerBB || MA10L < LowerBB) && reversal candle (bullish, closes back inside the band)
+SellExtreme = (MA5H > UpperBB || MA10H > UpperBB) && reversal candle (bearish, closes back inside the band)
 ```
+*(interpretation: "reversal candle" = a candle in the new direction that closes back inside the band.)*
 
-### 2.4 CSM – Candlestick Momentum
-A candle that **closes outside** the Bollinger Band while the bands **expand**.
-
-- **Buy Momentum:** close above BB Top, bands widening.
-- **Sell Momentum:** close below BB Low, bands widening.
-- Means a strong trend is running. **Do not trade against momentum.** Wait for a re-entry in its direction.
+### 2.2 TPW (hit MA 5/10)
+Step 2 of the Full Setup: "TPW (hit MA 5/10)".
+*(interpretation from the charts: after an extreme, price pulls back and touches the opposite MA5/10 – after a buy extreme it rises to touch MA5/10 High; after a sell extreme it falls to touch MA5/10 Low.)*
 
 ```text
-BandWidth[i]  = BBTop[i] - BBLow[i]
-Expanding     = BandWidth[i] > BandWidth[i+1]
-BuyMomentum   = Close[i] > BBTop[i] && Expanding
-SellMomentum  = Close[i] < BBLow[i] && Expanding
+BuyTPW  = after BuyExtreme,  High >= MA5H or MA10H
+SellTPW = after SellExtreme, Low  <= MA5L or MA10L
 ```
 
-### 2.5 Re-entry
-The main entry signal: after CSAK or momentum, price pulls back into the MA5/MA10 zone and then resumes.
+### 2.3 MHV – Market Hilang Volume ("market loses volume")
+| Buy | Sell |
+|---|---|
+| After an **Extreme Buy** | After an **Extreme Sell** |
+| "**no CSM Sell** that breaks the extreme" | "**no CSM Buy** that breaks the extreme" |
 
-- **Buy Re-entry:** after a Buy CSAK or momentum, price dips into MA5/MA10 Low (or toward BB Mid), then a candle closes back up, above the MAs.
-- **Sell Re-entry:** the mirror case using MA5/MA10 High.
-- Multiple re-entries can happen in one trend. The first one or two are usually the best.
+Price comes back to test the extreme area but can't produce a momentum candle beyond it, so the move is losing strength.
+
+```text
+BuyMHV  = after BuyExtreme (and TPW), price returns toward Lower BB,
+          but no CSM Sell closes below the extreme
+SellMHV = after SellExtreme (and TPW), price returns toward Upper BB,
+          but no CSM Buy closes above the extreme
+```
+
+### 2.4 CSAK / CSD – direction candle
+| Buy | Sell |
+|---|---|
+| "Break **MA5/10 High** and break **Mid BB**" | "Break **MA5/10 Low** and break **Mid BB**" |
+
+```text
+BuyCSAK  = Close > MA5H && Close > MA10H && Close > MidBB   (candle crosses Mid BB upward)
+SellCSAK = Close < MA5L && Close < MA10L && Close < MidBB   (candle crosses Mid BB downward)
+```
+
+### 2.5 CSM – momentum candle
+| Buy | Sell |
+|---|---|
+| "Break **MA5/10 High** and break **Upper BB**" | "Break **MA5/10 Low** and break **Lower BB**" |
+
+```text
+BuyCSM  = Close > MA5H && Close > MA10H && Close > UpperBB
+SellCSM = Close < MA5L && Close < MA10L && Close < LowerBB
+```
+The guidebook doesn't require the bands to be expanding.
+
+### 2.6 Direction (Dir)
+"Direction = the **first CSAK/CSM after MHV**." This sets the trading direction for the re-entry.
+
+### 2.7 Re-entry (Re)
+| Buy | Sell |
+|---|---|
+| "**Rejected MA5/10 Low**" | "**Rejected MA5/10 High**" |
+| "after a **CSAK/CSM Buy**" | "after a **CSAK/CSM Sell**" |
+
+```text
+BuyReentry  = after BuyCSAK/BuyCSM:   Low  <= MA5L/MA10L && Close > MA5L/MA10L
+SellReentry = after SellCSAK/SellCSM: High >= MA5H/MA10H && Close < MA5H/MA10H
+```
+
+### 2.8 Rejected EMA 50 (MA50) – used while the higher timeframe is in re-entry
+| Buy | Sell |
+|---|---|
+| "EMA 50 **below** Mid BB" | "EMA 50 **above** Mid BB" |
+| "candle **rejects** EMA 50" | "candle **rejects** EMA 50" |
+
+```text
+BuyRejectEMA50  = EMA50 < MidBB && Low  <= EMA50 && Close > EMA50
+SellRejectEMA50 = EMA50 > MidBB && High >= EMA50 && Close < EMA50
+```
+
+### 2.9 Gap BB to EMA50 – used while the higher timeframe is in re-entry
+| Buy | Sell |
+|---|---|
+| "EMA 50 **below** Lower BB" | "EMA 50 **above** Upper BB" |
+| "candle **rejects** Lower BB" | "candle **rejects** Upper BB" |
+
+```text
+BuyGap  = EMA50 < LowerBB && Low  <= LowerBB && Close > LowerBB
+SellGap = EMA50 > UpperBB && High >= UpperBB && Close < UpperBB
+```
 
 ---
 
-## 3. Full setup flow
+## 3. Full Setup (FS)
 
 ```text
-Extreme  →  MHV  →  CSAK  →  Re-entry  →  (Momentum / trend continues)
-  watch      weaken    confirm     ENTRY
+Extreme  →  TPW  →  MHV  →  Direction  →  Re-entry
 ```
 
-### Buy setup (reverse for sell)
-1. **Extreme:** MA5/MA10 Low below BB Low.
-2. **MHV:** price retests BB Low and fails to close below it.
-3. **CSAK:** a bullish candle closes above BB Mid and above the MAs.
-4. **Re-entry:** price pulls back to MA5/MA10 Low or BB Mid, and a bullish candle closes back up → **BUY**.
-5. **Stop loss:** below the recent swing low or below the MA5/MA10 Low zone.
-6. **Take profit:** at BB Top, or at the opposite extreme on the higher timeframe.
+1. **Extreme** – "not broken by a CSM".
+2. **TPW** – "hit MA 5/10".
+3. **MHV** – "no CSM".
+4. **Direction** – "first CSAK/CSM after MHV".
+5. **Re-entry** – "lower timeframe rejects Upper/Lower BB, or rejects EMA 50".
 
-### Trend filter (EMA 50)
-- Prefer buys when price is above EMA 50 and sells when it's below.
-- A CSAK that also crosses EMA 50 is stronger.
+### Trade management (not in the guidebook – my defaults for the EA)
+- **Stop loss:** beyond the re-entry candle's swing, or beyond the MA5/10 zone, plus a buffer in points.
+- **Take profit:** the opposite BB, or a fixed risk:reward.
 
 ---
 
-## 4. Multi-timeframe confirmation
+## 4. Multi-timeframe analysis
 
-BBMA is usually traded top-down:
+Timeframe groups (higher → middle → lower):
 
-| Role | Example timeframe | What to look for |
-|---|---|---|
-| Direction | D1 / H4 | Extreme, MHV, CSAK, or momentum direction |
-| Setup | H1 | Re-entry zone aligned with the higher TF |
-| Entry | M15 / M5 | Re-entry candle or a small CSAK in the same direction |
+| Group | HTF | Middle | Lower |
+|---|---|---|---|
+| 1 | W1 | D1 | H4 |
+| 2 | D1 | H4 | H1 |
+| 3 | H4 | H1 | M15 |
+| 4 | H1 | M15 | M5 |
 
-Rule of thumb: **only take a lower-TF re-entry in the direction of the higher-TF signal.**
+Named setups – the letters are the signal on each timeframe, **HTF → middle → lower**:
+
+| # | Setup | HTF | Middle TF | Lower TF |
+|---|---|---|---|---|
+| 1 | **Full Setup** | Extreme → TPW → MHV → Direction → Re-entry (across the timeframes) | | |
+| 2 | **REE** | Re-entry | Extreme | Extreme |
+| 3 | **RRE** | Re-entry | Re-entry | Extreme |
+| 4 | **RRM** | Re-entry | Re-entry | MHV |
+| 5 | **REM** | Re-entry | Extreme | MHV |
+| 6 | **Diamond** | Re-entry | Reject EMA 50 **or** Gap | Extreme / MHV / Full Setup |
+
+All signals in a setup must point the **same way** (all buy or all sell).
 
 ---
 
@@ -139,6 +194,7 @@ Rule of thumb: **only take a lower-TF re-entry in the direction of the higher-TF
 - **Spread:** widens at the daily rollover, the Asian open and around news (NFP, CPI, FOMC). The EA has a max-spread input.
 - **Active hours:** London and New York sessions give the cleanest BBMA moves. The EA has a trading-hours filter.
 - **History:** no gold history has been downloaded yet. Open an XAUUSD chart in MT5 on each timeframe you want, and scroll back so MT5 downloads the bars before backtesting.
+- The guidebook's CSAK, CSM, Re-entry, Extreme, Rejected EMA 50 and Gap examples are all **XAUUSD H4/D1 charts**, so they're good test cases for checking the indicator.
 
 ---
 
@@ -146,35 +202,54 @@ Rule of thumb: **only take a lower-TF re-entry in the direction of the higher-TF
 
 | File | Purpose | Status |
 |---|---|---|
-| `Include/BBMA/BBMA_Engine.mqh` | Shared signal logic: Extreme, MHV, CSAK, Momentum, Re-entry | Done |
-| `Indicators/BBMA/BBMA_OmaAlly.mq5` | Draws BB, MA5/10 High/Low, EMA 50 and an arrow per signal, for manual checking | Next |
-| `Experts/BBMA/BBMA_EA.mq5` | Trades the re-entry setup on XAUUSD | After the indicator is verified |
-| `build.sh` | Copies files into MT5's `MQL5` folder, compiles, shows errors | With the indicator |
+| `Include/BBMA/BBMA_Engine.mqh` | Shared signal logic, matched to the guidebook | **Done** (compiles clean) |
+| `Indicators/BBMA/BBMA_OmaAlly.mq5` | Draws BB, MA5/10 High/Low, EMA 50 and a label per signal (CSE, TPW, MHV, CSAK, CSM, Dir, Re, MA50, Gap), for manual checking | **Done** (compiles clean) |
+| `build.sh` | Copies files into MT5's `MQL5` folder, compiles, shows errors | **Done** |
+| `Experts/BBMA/BBMA_EA.mq5` | Trades XAUUSD re-entries, with the multi-timeframe setups as filters | Next, after the indicator is verified |
+
+### How the engine implements each signal (as built)
+- **CSE (Extreme):** MA5 or MA10 (low) below Lower BB with a bullish candle; mirror for sell. Cancelled if an opposite CSM later breaks the extreme level.
+- **TPW:** after an extreme, the first bar that touches the MA5/10 zone.
+- **MHV:** after TPW, a bar that retests near the extreme (within `MhvProxFactor` × band width) but holds, with no opposite CSM breaking it.
+- **CSAK:** candle closes beyond MA5/10 **and** Mid BB (but not the outer band).
+- **CSM:** candle closes beyond MA5/10 **and** the outer BB.
+- **Dir:** the first CSAK/CSM after an MHV.
+- **Re (Re-entry):** after any CSAK/CSM, a candle is rejected at MA5/10 and closes back the trend way. This is the EA's entry signal. Limited to `MaxReentries` within `ReentryMaxBars` bars.
+- **MA50 (Rejected EMA 50):** EMA 50 on the far side of Mid BB, candle rejects EMA 50.
+- **Gap:** EMA 50 beyond the band, candle rejects the band.
+
+All signals are inputs you can toggle, and the thresholds (`SeqLookback`, `ReentryMaxBars`, `MaxReentries`, `MhvProxFactor`, EMA filter) are inputs to tune while verifying.
+
+### How to run it
+1. In a terminal: `cd /run/media/xcode/DATA/coding/mql5/learn-mql5 && ./build.sh`
+2. In MT5: open an **XAUUSD** chart, then drag **Indicators → BBMA → BBMA Oma Ally** onto it.
+3. The BB/MA/EMA lines are drawn and each signal is labelled on its candle (buy labels below the bar, sell labels above).
+4. Compare against the guidebook's XAUUSD H4 examples and your own reading; note any mismatch and we adjust the inputs or the engine.
 
 ### Step 1 – Indicator, verify by hand
-1. Attach `BBMA_OmaAlly` to XAUUSD on H1 (then H4 and M15).
-2. Scroll back through history and check each arrow against your own reading of the chart.
-3. Note any signal that is missing, wrong or extra (bar time + timeframe), and adjust the inputs below or the rules in the engine.
-4. Repeat until the arrows match how you would mark the chart manually.
+1. Attach `BBMA_OmaAlly` to XAUUSD on H4 and compare with the guidebook's XAUUSD examples (Dec 2023 – Jan 2024).
+2. Check H1, M15 and D1 the same way.
+3. Note any signal that is missing, wrong or extra (bar time + timeframe), then adjust the inputs or the engine.
+4. Repeat until the labels match your own reading of the chart.
 
-### Step 2 – EA
+### Step 2 – Multi-timeframe dashboard row
+Show the latest signal for XAUUSD on W1, D1, H4, H1, M15 and M5 (like one row of the Analyzer Dashboard), and highlight Full Setup, REE, RRE, RRM, REM and Diamond when they line up.
+
+### Step 3 – EA
 Only after the indicator matches your manual reading:
-- Enters on **Re-entry** signals only, on closed candles.
-- Optional higher-timeframe filter (e.g. H4 direction for an H1 setup).
-- SL beyond the recent swing or MA zone plus a buffer in points; TP at the opposite BB or a fixed R:R.
-- Fixed lot or risk % per trade, one position at a time, max spread and trading-hours filters.
+- Enter on the lower-timeframe **re-entry** when one of the enabled MTF setups (Full Setup / REE / RRE / RRM / REM / Diamond) lines up.
+- Each setup on/off as an input, plus the timeframe group (e.g. H4–H1–M15).
+- SL/TP as in section 3; fixed lot or risk % per trade.
+- One position at a time; max spread and trading-hours filters.
 - Backtest in the Strategy Tester on XAUUSD, then forward-test on the demo account.
 
-### Rule settings (indicator and EA inputs)
-These are the current defaults in the engine. Change them during manual verification until they match your BBMA reading.
-
-| Input | Default | Question it answers |
-|---|---|---|
-| Extreme mode | MA5 **or** MA10 outside the band | Must both MAs be outside? |
-| MHV lookback | 20 bars | How long after an extreme can the retest happen? |
-| CSAK needs EMA 50 | No | Must CSAK also close beyond EMA 50? |
-| Require MHV before CSAK | No | Is a setup valid without an MHV? |
-| Re-entry max bars | 30 | How long after CSAK/momentum is a re-entry still valid? |
-| Max re-entries per setup | 2 | How many re-entries to take in one move? |
-| Re-entry EMA 50 filter | No | Buy re-entries only above EMA 50, sells only below? |
-| SL buffer / TP mode | To decide in the EA | Points beyond the swing; opposite BB or fixed R:R? |
+### Open questions to check on the chart
+| Question | Current default |
+|---|---|
+| Extreme: is one MA (MA5 **or** MA10) outside the band enough? | Yes – either |
+| What exactly counts as a "reversal candle"? | Candle in the new direction that closes back inside the band |
+| TPW: which MA must be touched – MA5 or MA10? | Either |
+| How many bars after the extreme can TPW / MHV still happen? | 20 bars |
+| CSAK: must the candle *open* on the other side of Mid BB, or is the previous close enough? | Previous close on the other side |
+| Re-entry: how many bars after CSAK/CSM is it still valid, and how many re-entries per move? | 30 bars, 2 re-entries |
+| SL buffer and TP mode | SL = swing + buffer; TP = opposite BB |
