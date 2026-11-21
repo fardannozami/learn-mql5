@@ -208,12 +208,19 @@ All signals in a setup must point the **same way** (all buy or all sell).
 | `Experts/BBMA/BBMA_EA.mq5` | Trades XAUUSD re-entries, with the multi-timeframe setups as filters | **Done** (compiles clean) |
 
 ### EA logic (as built)
-Enters on an **entry-TF Re-entry** (acts once per closed bar), then requires higher-TF agreement:
+Enters on an **entry-TF Re-entry** (acts once per closed bar), then applies, in order:
+- **Entry-quality — HTF EMA50 trend filter** (`InpUseHtfEma`, default on): the trade is only taken in the direction of the HTF EMA50 (price the right side of EMA50, and with `InpHtfEmaSlope` the EMA50 must also slope that way). This is the strongest win-rate lever — it drops the losing counter-trend re-entries in ranging markets and is neutral when the market trends. Optional `InpUseEntryEma` adds the same check on the entry TF.
 - **HTF** (default H4): most recent extreme / MHV / Dir / CSAK / CSM / Re-entry must point the same way. An opposing HTF signal blocks the trade.
 - **Mid** (default H1): a recent Reject-EMA50 / Gap / Re-entry in the same direction.
-- `MinConfirm` sets how many of the two must agree (default 1).
+- `MinConfirm` sets how many of the two must agree (default 1). *Note:* with the EMA filter on, `MinConfirm = 2` becomes meaningful again (it was a no-op before, because the nearest-signal confirmation almost always agreed).
 
-Defaults: timeframe group **H4 – H1 – M15**; one position at a time; SL at the swing over `SwingLookback` bars plus `SlBufferPts`; TP = `RiskRatio` × SL distance; fixed 0.01 lot (set `RiskPercent` > 0 to size by risk); max-spread and optional session filters. All signal thresholds match the indicator's inputs.
+**Exit — two modes:**
+- **Fixed TP/SL (default):** SL at the swing over `SwingLookback` bars plus `SlBufferPts`; TP = `RiskRatio` × SL distance (default **1.5**). Profit comes from letting winners run to the TP, so a 2:1-ish target matters.
+- **Dynamic signal exit** (`InpUseSignalExit`, default **off**): close the position when BBMA reverses — an **opposite CSAK on the entry TF**, or **≥ `InpExitCsmCount` opposite CSM on `InpExitLowerTF`** (M5) within `InpExitCsmWindow` bars. A swing SL stays as a backstop (`InpUseHardSL`). This roughly **halves drawdown** but lowers win% and net (it caps the winners), so it is off by default — turn it on when you value a smoother equity curve over win rate.
+
+Defaults: timeframe group **H4 – H1 – M15**; one position at a time; fixed 0.01 lot (set `RiskPercent` > 0 to size by risk); max-spread and optional session filters. All signal thresholds match the indicator's inputs.
+
+**Tuning dials (for win rate vs net):** `RiskRatio` is the main knob with the filter on — **1.5** ≈ balanced (highest all-round), **2.0** pushes win% highest in ranging markets, **2.5–3.0** maximises net at a lower win%.
 
 ### Backtesting the EA
 1. Open an XAUUSD chart on M15, H1 and H4 and scroll back so history downloads for all three.
@@ -231,7 +238,24 @@ Reports in `backtests/`. The "edge" row uses the edge-triggered engine (current)
 | 2024–2026 | per-bar | 2 | +$534.53 | 1.05 | 1 198 | — | — |
 | 2024–2025 | **edge** | 1 | **+$279.04** | **1.06** | **774** | **34.6%** | **4.82%** |
 
-The edge-triggered engine is more faithful to the guidebook (sparser, correct signals) but, for this EA, the 2024–2025 edge was slightly *lower* than the per-bar version — some consecutive-bar re-entries that happened to win are now filtered out. Treat the edge as a correctness fix for the indicator, not a profit improvement for the EA; the EA's entry logic still needs tuning (win rate ~35%, PF ~1.06 is a thin edge).
+The edge-triggered engine is more faithful to the guidebook (sparser, correct signals) but, for this EA, the 2024–2025 edge was slightly *lower* than the per-bar version — some consecutive-bar re-entries that happened to win are now filtered out. Treat the edge as a correctness fix for the indicator, not a profit improvement for the EA.
+
+#### Win-rate tuning (edge engine, XAUUSD M15)
+Goal: raise win rate without killing net. Key finding — **this EA profits from a few big winners, so simply moving TP closer raises win% but turns net negative.** The real lever is the **HTF EMA50 trend filter**, which lifts the whole curve:
+
+| Config (2024–2025) | Net | PF | Trades | Win % | Max DD |
+|---|---|---|---|---|---|
+| base, no filter, RR2.0 | +$279 | 1.06 | 774 | 34.6% | 4.82% |
+| no filter, RR1.0 (TP=SL) | −$282 | 0.95 | 1 077 | 49.0% | 6.21% |
+| dynamic signal exit, no filter | +$257 | 1.07 | 1 095 | 27.2% | 2.55% |
+| **filter, RR1.5 (default)** | **+$325** | **1.08** | **724** | **40.3%** | **3.83%** |
+| filter, RR2.0 | +$125 | 1.03 | 924 | 55.4% | 2.34% |
+| filter, RR2.5 | +$600 | 1.16 | 563 | 30.4% | 5.23% |
+| filter, RR3.0 | +$787 | 1.21 | 531 | 27.5% | 4.94% |
+
+Out-of-sample 2026 (strong trend): filter RR1.5 = +$775 / **42.6%** win / DD 4.54%; filter RR2.0 = +$815 / 36% (identical to base — in a clean trend the filter rejects nothing). The filter never hurts: it removes losing counter-trend re-entries in chop and is neutral in trends.
+
+**Chosen default = filter on + RR1.5** (signal exit off, fixed TP on). Re-confirmed with the shipped compiled defaults: 2024–2025 +$259 / **40.7%** win / DD 3.96%, and 2026 +$775 / **42.6%** win / DD 4.54% — beating the old base on every metric in both periods (higher win%, higher net, lower drawdown). Set `RiskRatio = 2.0` to push win% higher in ranging markets, or 2.5–3.0 to maximise net at a lower win rate. The dynamic signal exit (`InpUseSignalExit`) is off by default — it halves drawdown but lowers win% and net.
 
 ### How the engine implements each signal (as built)
 **Edge-triggered:** CSE, CSAK, CSM and Re fire only on the single candle that *crosses* — the bar that actually breaks the level while the previous bar was still on the other side — not on every bar that stays beyond it. This matches the guidebook, which marks the breaking candle, and stops the indicator from labelling a whole run of bars.

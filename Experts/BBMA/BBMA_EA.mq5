@@ -33,12 +33,17 @@ input bool   InpUseMid     = true;   // require Mid-TF gap/reject/reentry
 input int    InpMidWindow  = 10;     // bars back to read Mid signal
 input int    InpMinConfirm = 1;      // how many of the above must agree
 
+input group "Entry-quality filters"
+input bool   InpUseHtfEma   = true;  // enter only with the HTF EMA50 trend
+input bool   InpHtfEmaSlope = true;  // also require HTF EMA50 sloping that way
+input bool   InpUseEntryEma = false; // entry-TF close must be the trend side of EMA50
+
 input group "Risk & execution"
 input double InpFixedLot      = 0.01; // used when RiskPercent = 0
 input double InpRiskPercent   = 0.0;  // % of balance risked per trade (0 = fixed lot)
 input int    InpSwingLookback = 10;   // bars for the swing SL
 input int    InpSlBufferPts   = 50;   // extra SL buffer, points (gold: 100 = $1)
-input double InpRiskRatio     = 2.0;  // TP = RiskRatio x SL distance
+input double InpRiskRatio     = 1.5;  // TP = RiskRatio x SL distance
 input bool   InpOnePosition   = true; // only one position at a time
 input long   InpMagic         = 250011;
 input int    InpMaxSpreadPts  = 60;   // skip if spread above this (points)
@@ -50,12 +55,15 @@ input int    InpStartHour  = 7;
 input int    InpEndHour    = 21;
 
 input group "Dynamic exit (signal-based SL/TP)"
-input bool InpUseSignalExit = true;            // close on an opposite BBMA signal
+// NOTE: off by default. Backtests show the signal exit lowers win% AND net
+// for this EA (profit comes from letting winners run to the RiskRatio TP).
+// Turn it on for roughly half the drawdown at the cost of win% / net.
+input bool InpUseSignalExit = false;           // close on an opposite BBMA signal
 input ENUM_TIMEFRAMES InpExitLowerTF = PERIOD_M5; // lower TF for the CSM exit
 input int  InpExitCsmCount  = 2;               // opposite CSM candles on lower TF to exit
 input int  InpExitCsmWindow = 6;               // bars back on lower TF to count them
 input bool InpUseHardSL     = true;            // keep a protective swing SL (backstop)
-input bool InpUseFixedTP    = false;           // also keep the RiskRatio TP target
+input bool InpUseFixedTP    = true;            // use the RiskRatio TP target
 
 //--- handles per timeframe
 BBMAHandles  g_hEnt, g_hMid, g_hHtf, g_hExit;
@@ -299,6 +307,33 @@ void OnTick()
    if((fe[0]&BBMA_REENTRY_BUY) !=0) dir=+1;
    else if((fe[0]&BBMA_REENTRY_SELL)!=0) dir=-1;
    if(dir==0) return;   // no fresh re-entry on the just-closed entry bar
+
+   //--- entry-quality: trade only with the HTF EMA50 trend ------------
+   if(InpUseHtfEma)
+     {
+      double hema[]; ArraySetAsSeries(hema,true);
+      double hcl[];  ArraySetAsSeries(hcl,true);
+      if(CopyBuffer(g_hHtf.ema50,0,0,4,hema)<4) return;
+      if(CopyClose(_Symbol,InpHtfTF,0,4,hcl)<4) return;
+      // [1] = last closed HTF bar
+      if(dir>0 && hcl[1] <= hema[1]) return;   // price below HTF EMA50 -> no buy
+      if(dir<0 && hcl[1] >= hema[1]) return;   // price above HTF EMA50 -> no sell
+      if(InpHtfEmaSlope)
+        {
+         if(dir>0 && hema[1] <= hema[3]) return; // EMA50 not rising
+         if(dir<0 && hema[1] >= hema[3]) return; // EMA50 not falling
+        }
+     }
+   //--- entry-quality: close on the trend side of the entry-TF EMA50 --
+   if(InpUseEntryEma)
+     {
+      double eema[]; ArraySetAsSeries(eema,true);
+      double ecl[];  ArraySetAsSeries(ecl,true);
+      if(CopyBuffer(g_hEnt.ema50,0,0,2,eema)<2) return;
+      if(CopyClose(_Symbol,InpEntryTF,0,2,ecl)<2) return;
+      if(dir>0 && ecl[1] <= eema[1]) return;
+      if(dir<0 && ecl[1] >= eema[1]) return;
+     }
 
    //--- higher-timeframe confirmations
    int confirm=0;
