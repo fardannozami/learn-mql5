@@ -76,6 +76,13 @@ private:
    int       m_impSellBar;
    int       m_impBuyRe;     // buy re-entries taken since that impulse
    int       m_impSellRe;
+   //--- edge-trigger state (fire only on the breaking candle) ---------
+   bool      m_hasPrev;      // a previous bar is stored
+   BBMABar   m_prev;         // previous closed bar + its values
+   bool      m_exBuyEp;      // a buy-extreme already fired this MA-outside episode
+   bool      m_exSellEp;
+   bool      m_prevReBuy;    // previous bar met the raw re-entry condition
+   bool      m_prevReSell;
 
    void ResetSide(BBMASide &s) { s.phase=0; s.extremeBar=-100000; s.extremeLevel=0.0; }
 
@@ -88,6 +95,9 @@ public:
       ResetSide(m_sell);
       m_impBuyBar=-100000;  m_impSellBar=-100000;
       m_impBuyRe =0;        m_impSellRe =0;
+      m_hasPrev  =false;
+      m_exBuyEp  =false;    m_exSellEp  =false;
+      m_prevReBuy=false;    m_prevReSell=false;
      }
 
    int  BuyPhase()  const { return m_buy.phase;  }
@@ -107,18 +117,34 @@ public:
       bool   bull    = b.close > b.open;
       bool   bear    = b.close < b.open;
 
-      //--- instantaneous signals -----------------------------------
-      // Extreme: MA5/10 outside the band + a reversal candle
-      bool exBuy  = (b.ma5l < b.bbLow || b.ma10l < b.bbLow) && bull;
-      bool exSell = (b.ma5h > b.bbTop || b.ma10h > b.bbTop) && bear;
+      //--- edge comparisons against the previous bar ----------------
+      double pMaHiMax = m_hasPrev ? MathMax(m_prev.ma5h, m_prev.ma10h) : 0.0;
+      double pMaLoMin = m_hasPrev ? MathMin(m_prev.ma5l, m_prev.ma10l) : 0.0;
 
-      // CSM: break MA5/10 high + break Upper BB (mirror for sell)
-      bool csmBuy  = bull && b.close > maHiMax && b.close > b.bbTop;
-      bool csmSell = bear && b.close < maLoMin && b.close < b.bbLow;
+      //--- instantaneous signals (edge-triggered) ------------------
+      // Extreme (CSE): MA5/10 outside the band + first reversal candle
+      // of the episode. Re-arms once the MAs come back inside the band.
+      bool maBelow = (b.ma5l < b.bbLow || b.ma10l < b.bbLow);
+      bool maAbove = (b.ma5h > b.bbTop || b.ma10h > b.bbTop);
+      if(!maBelow) m_exBuyEp  = false;
+      if(!maAbove) m_exSellEp = false;
+      bool exBuy  = false, exSell = false;
+      if(maBelow && bull && !m_exBuyEp)  { exBuy  = true; m_exBuyEp  = true; }
+      if(maAbove && bear && !m_exSellEp) { exSell = true; m_exSellEp = true; }
 
-      // CSAK: break MA5/10 high + break Mid BB (and not already a CSM)
-      bool csakBuy  = bull && b.close > maHiMax && b.close > b.bbMid && !csmBuy;
-      bool csakSell = bear && b.close < maLoMin && b.close < b.bbMid && !csmSell;
+      // CSM: the candle that CLOSES through the Upper/Lower BB (prev bar
+      // was still inside the band) while also beyond MA5/10.
+      bool csmBuyLvl  = bull && b.close > maHiMax && b.close > b.bbTop;
+      bool csmSellLvl = bear && b.close < maLoMin && b.close < b.bbLow;
+      bool csmBuy  = csmBuyLvl  && (!m_hasPrev || m_prev.close <= m_prev.bbTop);
+      bool csmSell = csmSellLvl && (!m_hasPrev || m_prev.close >= m_prev.bbLow);
+
+      // CSAK: the candle that CLOSES through MA5/10 (prev bar was still on
+      // the other side of the MAs), beyond Mid BB, and not already a CSM.
+      bool csakBuyLvl  = bull && b.close > maHiMax && b.close > b.bbMid;
+      bool csakSellLvl = bear && b.close < maLoMin && b.close < b.bbMid;
+      bool csakBuy  = csakBuyLvl  && !csmBuy  && (!m_hasPrev || m_prev.close <= pMaHiMax);
+      bool csakSell = csakSellLvl && !csmSell && (!m_hasPrev || m_prev.close >= pMaLoMin);
 
       // Rejected EMA50 (EMA50 on the far side of Mid BB)
       bool rejBuy  = bull && b.ema50 < b.bbMid && b.low  <= b.ema50 && b.close > b.ema50;
@@ -183,17 +209,27 @@ public:
       else if(m_sell.phase>=1 && m_bar-m_sell.extremeBar>m_s.seqLookback)
          m_sell.phase=0;
 
-      //--- re-entry: rejected at MA5/10 after a CSAK/CSM -------------
+      //--- re-entry: pull back to MA5/10 then reject, after a CSAK/CSM.
+      // Edge-triggered: one touch-and-reject = one signal (the raw
+      // condition must have been false on the previous bar).
       bool reBuyCond  = bull && b.low  <= maLoMax && b.close > maLoMax;
       bool reSellCond = bear && b.high >= maHiMin && b.close < maHiMin;
+      bool reBuyEdge  = reBuyCond  && !m_prevReBuy;
+      bool reSellEdge = reSellCond && !m_prevReSell;
       if(m_impBuyBar>0 && m_bar>m_impBuyBar && m_bar-m_impBuyBar<=m_s.reentryMaxBars &&
-         m_impBuyRe<m_s.maxReentries && reBuyCond &&
+         m_impBuyRe<m_s.maxReentries && reBuyEdge &&
          (!m_s.reentryEmaFilter || b.close>b.ema50))
         { flags|=BBMA_REENTRY_BUY; m_impBuyRe++; }
       if(m_impSellBar>0 && m_bar>m_impSellBar && m_bar-m_impSellBar<=m_s.reentryMaxBars &&
-         m_impSellRe<m_s.maxReentries && reSellCond &&
+         m_impSellRe<m_s.maxReentries && reSellEdge &&
          (!m_s.reentryEmaFilter || b.close<b.ema50))
         { flags|=BBMA_REENTRY_SELL; m_impSellRe++; }
+
+      //--- remember this bar for next step's edge comparisons --------
+      m_prevReBuy  = reBuyCond;
+      m_prevReSell = reSellCond;
+      m_prev       = b;
+      m_hasPrev    = true;
 
       return flags;
      }

@@ -43,6 +43,17 @@ void OnStart()
    FileWriteString(fh,StringFormat("BarsCalculated=%d\r\n",BarsCalculated(ind)));
    Sleep(2000);
 
+   //--- diagnostic: are the line buffers actually populated?
+   double u[],e[]; ArraySetAsSeries(u,true); ArraySetAsSeries(e,true);
+   int cu=CopyBuffer(ind,0,0,3,u);   // plot 0 = BB Upper
+   int ce=CopyBuffer(ind,7,0,3,e);   // plot 7 = EMA50
+   FileWriteString(fh,StringFormat("buf0(BBU) n=%d v=%s %s %s\r\n",cu,
+                   (cu>0?DoubleToString(u[0],2):"-"),(cu>1?DoubleToString(u[1],2):"-"),
+                   (cu>2?DoubleToString(u[2],2):"-")));
+   FileWriteString(fh,StringFormat("buf7(EMA) n=%d v=%s %s %s\r\n",ce,
+                   (ce>0?DoubleToString(e[0],2):"-"),(ce>1?DoubleToString(e[1],2):"-"),
+                   (ce>2?DoubleToString(e[2],2):"-")));
+
    string dates[]={ "2023.10.31 00:00", "2023.12.19 00:00",
                     "2024.01.11 00:00", "2024.01.05 00:00" };
    string tags[] ={ "A_2023-10-31", "B_2023-12-19",

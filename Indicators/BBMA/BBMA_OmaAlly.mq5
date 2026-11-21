@@ -80,8 +80,20 @@ int OnInit()
    SetIndexBuffer(6,BufMA10L,INDICATOR_DATA);
    SetIndexBuffer(7,BufEMA,  INDICATOR_DATA);
 
-   if(!InpShowLines)
-      for(int i=0;i<8;i++) PlotIndexSetInteger(i,PLOT_DRAW_TYPE,DRAW_NONE);
+   for(int i=0;i<8;i++)
+      PlotIndexSetInteger(i,PLOT_DRAW_TYPE, InpShowLines?DRAW_LINE:DRAW_NONE);
+   if(InpShowLines)
+     {
+      PlotIndexSetInteger(0,PLOT_LINE_COLOR,clrLimeGreen);
+      PlotIndexSetInteger(1,PLOT_LINE_COLOR,clrLimeGreen);
+      PlotIndexSetInteger(2,PLOT_LINE_COLOR,clrLimeGreen);
+      PlotIndexSetInteger(3,PLOT_LINE_COLOR,clrRed);
+      PlotIndexSetInteger(4,PLOT_LINE_COLOR,clrOrangeRed);
+      PlotIndexSetInteger(5,PLOT_LINE_COLOR,clrDodgerBlue);
+      PlotIndexSetInteger(6,PLOT_LINE_COLOR,clrRoyalBlue);
+      PlotIndexSetInteger(7,PLOT_LINE_COLOR,clrAqua);
+      PlotIndexSetInteger(7,PLOT_LINE_WIDTH,2);
+     }
 
    if(!BBMACreateHandles(_Symbol,_Period,g_h))
      { Print("BBMA_OmaAlly: failed to create indicator handles"); return(INIT_FAILED); }

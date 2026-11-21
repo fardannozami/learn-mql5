@@ -193,7 +193,7 @@ All signals in a setup must point the **same way** (all buy or all sell).
 - **Contract size:** usually 100 oz per lot, so 0.01 lot ≈ $1 per $1 move. Verify on your account (`SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE)`); the EA calculates lot size from tick value, not from this assumption.
 - **Spread:** widens at the daily rollover, the Asian open and around news (NFP, CPI, FOMC). The EA has a max-spread input.
 - **Active hours:** London and New York sessions give the cleanest BBMA moves. The EA has a trading-hours filter.
-- **History:** no gold history has been downloaded yet. Open an XAUUSD chart in MT5 on each timeframe you want, and scroll back so MT5 downloads the bars before backtesting.
+- **History:** XAUUSD history is downloaded — W1/D1/H4/H1 back to 2021, M15 back to 2022-08, M5 back to 2025-06 (see `Scripts/BBMA/DownloadHistory.mq5`). Re-run it to extend coverage before a longer backtest.
 - The guidebook's CSAK, CSM, Re-entry, Extreme, Rejected EMA 50 and Gap examples are all **XAUUSD H4/D1 charts**, so they're good test cases for checking the indicator.
 
 ---
@@ -221,14 +221,27 @@ Defaults: timeframe group **H4 – H1 – M15**; one position at a time; SL at t
 3. Start with "Every tick based on real ticks" off (use "1 minute OHLC") for a quick first pass; switch to real ticks once the logic looks right.
 4. The EA reads M15/H1/H4 together, so make sure all three have history or it will simply not trade.
 
+#### Backtest results so far (XAUUSD M15, 0.01 lot, deposit 10 000)
+Reports in `backtests/`. The "edge" row uses the edge-triggered engine (current); the others used the earlier per-bar engine.
+
+| Period | Engine | MinConfirm | Net profit | Profit factor | Trades | Win % | Max DD |
+|---|---|---|---|---|---|---|---|
+| 2024–2025 | per-bar | 1 | +$494.61 | 1.09 | 844 | ~33% | — |
+| 2026 | per-bar | 1 | −$35.24 | 0.99 | 455 | — | — |
+| 2024–2026 | per-bar | 2 | +$534.53 | 1.05 | 1 198 | — | — |
+| 2024–2025 | **edge** | 1 | **+$279.04** | **1.06** | **774** | **34.6%** | **4.82%** |
+
+The edge-triggered engine is more faithful to the guidebook (sparser, correct signals) but, for this EA, the 2024–2025 edge was slightly *lower* than the per-bar version — some consecutive-bar re-entries that happened to win are now filtered out. Treat the edge as a correctness fix for the indicator, not a profit improvement for the EA; the EA's entry logic still needs tuning (win rate ~35%, PF ~1.06 is a thin edge).
+
 ### How the engine implements each signal (as built)
-- **CSE (Extreme):** MA5 or MA10 (low) below Lower BB with a bullish candle; mirror for sell. Cancelled if an opposite CSM later breaks the extreme level.
+**Edge-triggered:** CSE, CSAK, CSM and Re fire only on the single candle that *crosses* — the bar that actually breaks the level while the previous bar was still on the other side — not on every bar that stays beyond it. This matches the guidebook, which marks the breaking candle, and stops the indicator from labelling a whole run of bars.
+- **CSE (Extreme):** MA5 or MA10 (low) below Lower BB with a bullish candle; mirror for sell. Fires once per episode — the first reversal candle while the MAs are outside the band — and re-arms only after the MAs come back inside. Cancelled if an opposite CSM later breaks the extreme level.
 - **TPW:** after an extreme, the first bar that touches the MA5/10 zone.
 - **MHV:** after TPW, a bar that retests near the extreme (within `MhvProxFactor` × band width) but holds, with no opposite CSM breaking it.
-- **CSAK:** candle closes beyond MA5/10 **and** Mid BB (but not the outer band).
-- **CSM:** candle closes beyond MA5/10 **and** the outer BB.
+- **CSAK:** the candle that *closes through* MA5/10 (previous bar still on the other side) **and** beyond Mid BB (but not the outer band).
+- **CSM:** the candle that *closes through* the outer BB (previous bar still inside the band) **and** beyond MA5/10.
 - **Dir:** the first CSAK/CSM after an MHV.
-- **Re (Re-entry):** after any CSAK/CSM, a candle is rejected at MA5/10 and closes back the trend way. This is the EA's entry signal. Limited to `MaxReentries` within `ReentryMaxBars` bars.
+- **Re (Re-entry):** after any CSAK/CSM, a candle pulls back to MA5/10 and is rejected, closing back the trend way. Edge-triggered: one touch-and-reject = one signal (the raw condition must have been false on the previous bar). This is the EA's entry signal. Limited to `MaxReentries` within `ReentryMaxBars` bars.
 - **MA50 (Rejected EMA 50):** EMA 50 on the far side of Mid BB, candle rejects EMA 50.
 - **Gap:** EMA 50 beyond the band, candle rejects the band.
 
