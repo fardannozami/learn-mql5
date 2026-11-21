@@ -205,7 +205,21 @@ All signals in a setup must point the **same way** (all buy or all sell).
 | `Include/BBMA/BBMA_Engine.mqh` | Shared signal logic, matched to the guidebook | **Done** (compiles clean) |
 | `Indicators/BBMA/BBMA_OmaAlly.mq5` | Draws BB, MA5/10 High/Low, EMA 50 and a label per signal (CSE, TPW, MHV, CSAK, CSM, Dir, Re, MA50, Gap), for manual checking | **Done** (compiles clean) |
 | `build.sh` | Copies files into MT5's `MQL5` folder, compiles, shows errors | **Done** |
-| `Experts/BBMA/BBMA_EA.mq5` | Trades XAUUSD re-entries, with the multi-timeframe setups as filters | Next, after the indicator is verified |
+| `Experts/BBMA/BBMA_EA.mq5` | Trades XAUUSD re-entries, with the multi-timeframe setups as filters | **Done** (compiles clean) |
+
+### EA logic (as built)
+Enters on an **entry-TF Re-entry** (acts once per closed bar), then requires higher-TF agreement:
+- **HTF** (default H4): most recent extreme / MHV / Dir / CSAK / CSM / Re-entry must point the same way. An opposing HTF signal blocks the trade.
+- **Mid** (default H1): a recent Reject-EMA50 / Gap / Re-entry in the same direction.
+- `MinConfirm` sets how many of the two must agree (default 1).
+
+Defaults: timeframe group **H4 – H1 – M15**; one position at a time; SL at the swing over `SwingLookback` bars plus `SlBufferPts`; TP = `RiskRatio` × SL distance; fixed 0.01 lot (set `RiskPercent` > 0 to size by risk); max-spread and optional session filters. All signal thresholds match the indicator's inputs.
+
+### Backtesting the EA
+1. Open an XAUUSD chart on M15, H1 and H4 and scroll back so history downloads for all three.
+2. In MT5: **View → Strategy Tester** (Ctrl+R) → Expert `BBMA\BBMA_EA`, Symbol XAUUSD, a date range covered by the downloaded history.
+3. Start with "Every tick based on real ticks" off (use "1 minute OHLC") for a quick first pass; switch to real ticks once the logic looks right.
+4. The EA reads M15/H1/H4 together, so make sure all three have history or it will simply not trade.
 
 ### How the engine implements each signal (as built)
 - **CSE (Extreme):** MA5 or MA10 (low) below Lower BB with a bullish candle; mirror for sell. Cancelled if an opposite CSM later breaks the extreme level.

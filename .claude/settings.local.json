@@ -3,7 +3,8 @@
     "allow": [
       "Bash(ls *)",
       "Bash(chmod +x build.sh)",
-      "Bash(./build.sh)"
+      "Bash(./build.sh)",
+      "Bash(./build.sh Experts/BBMA/BBMA_EA.mq5)"
     ]
   }
 }
