@@ -29,6 +29,10 @@ input int    InpMaxReentries    = 3;     // re-entries per CSAK/CSM impulse
 input bool   InpReentryEmaFilter= false; // buy re-entry only above EMA50
 input double InpMhvProxFactor    = 0.5;  // retest proximity to extreme (x band width)
 
+input group "Multi-timeframe validation (TF above)"
+input bool   InpUseMtfValidate   = true; // CSM needs HTF CSAK, CSE needs HTF MHV
+input int    InpMtfParentWindow  = 3;    // parent bars back to look for confirmation
+
 input group "Which labels to show"
 input bool   InpShowExtreme = true;
 input bool   InpShowTPW     = true;
@@ -55,6 +59,14 @@ CBBMAEngine  g_engine;
 int          g_processed = 0;
 string       PREFIX = "BBMA_";
 #define      WARMUP 60
+
+//--- parent-TF validation state
+BBMAHandles     g_hP;
+ENUM_TIMEFRAMES g_parentTF;
+int             g_pf[];
+datetime        g_pt[];
+datetime        g_pBarTime = 0;
+bool            g_pReady    = false;
 
 //--- one label definition
 struct SigDef { int mask; string txt; color clr; bool buy; bool show; };
@@ -98,6 +110,11 @@ int OnInit()
    if(!BBMACreateHandles(_Symbol,_Period,g_h))
      { Print("BBMA_OmaAlly: failed to create indicator handles"); return(INIT_FAILED); }
 
+   g_parentTF=BBMAParentTF(_Period);
+   g_pReady=false; g_pBarTime=0;
+   if(InpUseMtfValidate && !BBMACreateHandles(_Symbol,g_parentTF,g_hP))
+     { Print("BBMA_OmaAlly: failed to create parent-TF handles"); return(INIT_FAILED); }
+
    IndicatorSetString(INDICATOR_SHORTNAME,"BBMA Oma Ally");
 
    //--- label catalog (order controls stacking)
@@ -131,6 +148,7 @@ void OnDeinit(const int reason)
   {
    ObjectsDeleteAll(0,PREFIX);
    BBMAReleaseHandles(g_h);
+   if(InpUseMtfValidate) BBMAReleaseHandles(g_hP);
   }
 
 //+------------------------------------------------------------------+
@@ -197,6 +215,25 @@ int OnCalculate(const int rates_total,const int prev_calculated,
       g_processed=WARMUP;
      }
 
+   //--- (re)build the parent-TF signal series for CSM/CSE validation
+   if(InpUseMtfValidate)
+     {
+      datetime pbar=iTime(_Symbol,g_parentTF,0);
+      if(prev_calculated==0 || pbar!=g_pBarTime || !g_pReady)
+        {
+         BBMASettings sp; BBMADefaults(sp);
+         sp.seqLookback=InpSeqLookback; sp.reentryMaxBars=InpReentryMaxBars;
+         sp.maxReentries=InpMaxReentries; sp.reentryEmaFilter=InpReentryEmaFilter;
+         sp.mhvProxFactor=InpMhvProxFactor;
+         int pc=BBMABuildSeries(_Symbol,g_parentTF,g_hP,sp,1500,g_pf,g_pt);
+         g_pReady=(pc>0);
+         if(g_pReady) g_pBarTime=pbar;
+        }
+      //--- wait until the TF-above series is ready, so historical bars
+      //    are validated on the full recalc (not drawn unvalidated).
+      if(!g_pReady) return(prev_calculated);
+     }
+
    int closedBars=rates_total-1;           // last bar is still forming
    for(int i=g_processed;i<closedBars;i++)
      {
@@ -208,6 +245,8 @@ int OnCalculate(const int rates_total,const int prev_calculated,
       if(b.bbTop==0.0 || b.bbLow==0.0 || b.ema50==0.0) continue;
 
       int flags=g_engine.Step(b);
+      if(InpUseMtfValidate && g_pReady)
+         flags=BBMAApplyMtfValidation(flags,time[i],g_pf,g_pt,InpMtfParentWindow);
       if(flags!=0)
         {
          DrawBarSignals(time[i],high[i],low[i],flags,b.bbTop-b.bbLow);

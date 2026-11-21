@@ -38,6 +38,10 @@ input bool   InpUseHtfEma   = true;  // enter only with the HTF EMA50 trend
 input bool   InpHtfEmaSlope = true;  // also require HTF EMA50 sloping that way
 input bool   InpUseEntryEma = false; // entry-TF close must be the trend side of EMA50
 
+input group "Multi-timeframe validation (TF above)"
+input bool   InpUseMtfValidate  = true; // CSM needs HTF CSAK, CSE needs HTF MHV
+input int    InpMtfParentWindow = 3;    // parent bars back to look for confirmation
+
 input group "Risk & execution"
 input double InpFixedLot      = 0.01; // used when RiskPercent = 0
 input double InpRiskPercent   = 0.0;  // % of balance risked per trade (0 = fixed lot)
@@ -66,7 +70,8 @@ input bool InpUseHardSL     = true;            // keep a protective swing SL (ba
 input bool InpUseFixedTP    = true;            // use the RiskRatio TP target
 
 //--- handles per timeframe
-BBMAHandles  g_hEnt, g_hMid, g_hHtf, g_hExit;
+BBMAHandles  g_hEnt, g_hMid, g_hHtf, g_hExit, g_hHtfP;
+ENUM_TIMEFRAMES g_htfParentTF;
 BBMASettings g_set;
 CTrade       g_trade;
 datetime     g_lastBar = 0;
@@ -92,6 +97,9 @@ int OnInit()
      { Print("BBMA_EA: failed to create indicator handles"); return(INIT_FAILED); }
    if(InpUseSignalExit && !BBMACreateHandles(_Symbol,InpExitLowerTF,g_hExit))
      { Print("BBMA_EA: failed to create lower-TF exit handles"); return(INIT_FAILED); }
+   g_htfParentTF=BBMAParentTF(InpHtfTF);
+   if(InpUseMtfValidate && !BBMACreateHandles(_Symbol,g_htfParentTF,g_hHtfP))
+     { Print("BBMA_EA: failed to create HTF-parent handles"); return(INIT_FAILED); }
 
    g_trade.SetExpertMagicNumber(InpMagic);
    g_trade.SetDeviationInPoints(InpSlippagePts);
@@ -105,6 +113,7 @@ void OnDeinit(const int reason)
    BBMAReleaseHandles(g_hMid);
    BBMAReleaseHandles(g_hHtf);
    if(InpUseSignalExit) BBMAReleaseHandles(g_hExit);
+   if(InpUseMtfValidate) BBMAReleaseHandles(g_hHtfP);
   }
 
 //+------------------------------------------------------------------+
@@ -339,7 +348,16 @@ void OnTick()
    int confirm=0;
    if(InpUseHTF)
      {
-      int fh[]; if(ScanTF(InpHtfTF,g_hHtf,fh)<=0) return;
+      int fh[]; datetime th[];
+      if(BBMABuildSeries(_Symbol,InpHtfTF,g_hHtf,g_set,SCAN_BARS,fh,th)<=0) return;
+      //--- validate HTF CSM/CSE against the TF above (parent) --------
+      if(InpUseMtfValidate)
+        {
+         int pf[]; datetime pt[];
+         if(BBMABuildSeries(_Symbol,g_htfParentTF,g_hHtfP,g_set,SCAN_BARS,pf,pt)>0)
+            for(int i=0;i<ArraySize(fh);i++)
+               fh[i]=BBMAApplyMtfValidation(fh[i],th[i],pf,pt,InpMtfParentWindow);
+        }
       int hd=NearestDir(fh,InpHtfWindow,
              BBMA_EXTREME_BUY|BBMA_MHV_BUY|BBMA_DIR_BUY|BBMA_REENTRY_BUY|BBMA_CSAK_BUY|BBMA_CSM_BUY,
              BBMA_EXTREME_SELL|BBMA_MHV_SELL|BBMA_DIR_SELL|BBMA_REENTRY_SELL|BBMA_CSAK_SELL|BBMA_CSM_SELL);

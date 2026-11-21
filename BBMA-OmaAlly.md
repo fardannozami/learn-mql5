@@ -269,6 +269,16 @@ Out-of-sample 2026 (strong trend): filter RR1.5 = +$775 / **42.6%** win / DD 4.5
 - **MA50 (Rejected EMA 50):** EMA 50 on the far side of Mid BB, candle rejects EMA 50.
 - **Gap:** EMA 50 beyond the band, candle rejects the band.
 
+#### Multi-timeframe signal validation (TF above)
+A CSM or CSE is only "real" when the timeframe above confirms it (`InpUseMtfValidate`, default on; `InpMtfParentWindow` = parent bars to look back, default 3):
+- **CSM valid** only if the TF above printed a **CSAK** in the same direction within the window.
+- **CSE (Extreme) valid** only if the TF above printed an **MHV** in the same direction within the window.
+
+The "TF above" follows the BBMA ladder **M5 → M15 → H1 → H4 → D1 → W1** (`BBMAParentTF`). Shared helpers live in `BBMA_Engine.mqh` (`BBMABuildSeries`, `BBMAApplyMtfValidation`) so the indicator, EA and scanner all use the same rule.
+
+- **Indicator:** unconfirmed CSM/CSE labels are not drawn. On an H4 chart (parent D1) this removed ~35% of CSM and ~61% of CSE labels — the chart now matches the methodology instead of marking every break.
+- **EA:** the HTF trend read validates its CSM/CSE against the TF above (H4 → D1). Effect on results is small (the EA enters on Re-entry, not on CSM/CSE directly): 2024–2025 unchanged, 2026 net slipped ~15% with the same win rate. Kept on by default for consistency; set `InpUseMtfValidate = false` in the EA if you prefer the extra net.
+
 All signals are inputs you can toggle, and the thresholds (`SeqLookback`, `ReentryMaxBars`, `MaxReentries`, `MhvProxFactor`, EMA filter) are inputs to tune while verifying.
 
 ### How to run it

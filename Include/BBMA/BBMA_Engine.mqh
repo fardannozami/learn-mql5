@@ -258,4 +258,110 @@ void BBMAReleaseHandles(BBMAHandles &h)
    IndicatorRelease(h.ma5l);  IndicatorRelease(h.ma10l); IndicatorRelease(h.ema50);
   }
 
+//+------------------------------------------------------------------+
+//| Multi-timeframe signal validation                                |
+//|   - a CSM is valid only if the TF above printed a CSAK (same dir) |
+//|   - an Extreme (CSE) is valid only if the TF above printed an MHV |
+//| The "TF above" follows the BBMA ladder M5-M15-H1-H4-D1-W1.        |
+//+------------------------------------------------------------------+
+ENUM_TIMEFRAMES BBMAParentTF(const ENUM_TIMEFRAMES tf)
+  {
+   switch(tf)
+     {
+      case PERIOD_M1:  return(PERIOD_M5);
+      case PERIOD_M5:  return(PERIOD_M15);
+      case PERIOD_M15: return(PERIOD_H1);
+      case PERIOD_M30: return(PERIOD_H1);
+      case PERIOD_H1:  return(PERIOD_H4);
+      case PERIOD_H4:  return(PERIOD_D1);
+      case PERIOD_D1:  return(PERIOD_W1);
+      case PERIOD_W1:  return(PERIOD_MN1);
+      default:         return(PERIOD_D1);
+     }
+  }
+
+//--- build a time-indexed flag series for one TF (index 0 = newest closed)
+int BBMABuildSeries(const string sym,const ENUM_TIMEFRAMES tf,BBMAHandles &h,
+                    const BBMASettings &s,const int maxBars,int &out[],datetime &outTime[])
+  {
+   int avail=Bars(sym,tf);
+   int cnt=MathMin(maxBars,avail-60);
+   if(cnt<100) return(0);
+   if(BarsCalculated(h.bb)<cnt+1 || BarsCalculated(h.ema50)<cnt+1) return(0);
+
+   int need=cnt+1;
+   double o[],hi[],lo[],cl[],u[],m[],l[],a5h[],a10h[],a5l[],a10l[],e[];
+   datetime tm[];
+   ArraySetAsSeries(o,true); ArraySetAsSeries(hi,true); ArraySetAsSeries(lo,true);
+   ArraySetAsSeries(cl,true);ArraySetAsSeries(u,true);  ArraySetAsSeries(m,true);
+   ArraySetAsSeries(l,true); ArraySetAsSeries(a5h,true); ArraySetAsSeries(a10h,true);
+   ArraySetAsSeries(a5l,true);ArraySetAsSeries(a10l,true);ArraySetAsSeries(e,true);
+   ArraySetAsSeries(tm,true);
+
+   if(CopyTime(sym,tf,0,need,tm)   <need) return(0);
+   if(CopyOpen(sym,tf,0,need,o)    <need) return(0);
+   if(CopyHigh(sym,tf,0,need,hi)   <need) return(0);
+   if(CopyLow(sym,tf,0,need,lo)    <need) return(0);
+   if(CopyClose(sym,tf,0,need,cl)  <need) return(0);
+   if(CopyBuffer(h.bb,   1,0,need,u)  <need) return(0);
+   if(CopyBuffer(h.bb,   0,0,need,m)  <need) return(0);
+   if(CopyBuffer(h.bb,   2,0,need,l)  <need) return(0);
+   if(CopyBuffer(h.ma5h, 0,0,need,a5h)<need) return(0);
+   if(CopyBuffer(h.ma10h,0,0,need,a10h)<need)return(0);
+   if(CopyBuffer(h.ma5l, 0,0,need,a5l)<need) return(0);
+   if(CopyBuffer(h.ma10l,0,0,need,a10l)<need)return(0);
+   if(CopyBuffer(h.ema50,0,0,need,e)  <need) return(0);
+
+   ArrayResize(out,cnt);     ArrayInitialize(out,0);
+   ArrayResize(outTime,cnt);
+
+   CBBMAEngine eng; eng.Init(s);
+   for(int pos=cnt;pos>=1;pos--)   // oldest -> newest closed bar
+     {
+      BBMABar b;
+      b.open=o[pos]; b.high=hi[pos]; b.low=lo[pos]; b.close=cl[pos];
+      b.bbTop=u[pos]; b.bbMid=m[pos]; b.bbLow=l[pos];
+      b.ma5h=a5h[pos]; b.ma10h=a10h[pos]; b.ma5l=a5l[pos]; b.ma10l=a10l[pos];
+      b.ema50=e[pos];
+      int f=0;
+      if(b.bbTop!=0.0 && b.bbLow!=0.0 && b.ema50!=0.0) f=eng.Step(b);
+      out[pos-1]=f;
+      outTime[pos-1]=tm[pos];
+     }
+   return(cnt);
+  }
+
+//--- true if the parent series carries `mask` within `window` bars up to t
+bool BBMASeriesHasBefore(const int &pf[],const datetime &pt[],const datetime t,
+                         const int window,const int mask)
+  {
+   int n=ArraySize(pf);
+   if(n<=0) return(false);
+   int start=-1;                         // newest parent bar at or before t
+   for(int i=0;i<n;i++) if(pt[i]<=t){ start=i; break; }
+   if(start<0) return(false);
+   int last=MathMin(n-1,start+window-1);
+   for(int i=start;i<=last;i++) if((pf[i]&mask)!=0) return(true);
+   return(false);
+  }
+
+//--- the parent series' time span covers t (so validation is meaningful)
+bool BBMASeriesCovers(const datetime &pt[],const datetime t)
+  {
+   int n=ArraySize(pt);
+   return(n>0 && t>=pt[n-1]);
+  }
+
+//--- strip CSM/CSE bits that the TF above does not confirm
+int BBMAApplyMtfValidation(int flags,const datetime t,const int &pf[],
+                           const datetime &pt[],const int window)
+  {
+   if(!BBMASeriesCovers(pt,t)) return(flags);   // outside coverage -> leave as-is
+   if((flags&BBMA_CSM_BUY)     !=0 && !BBMASeriesHasBefore(pf,pt,t,window,BBMA_CSAK_BUY))  flags&=~BBMA_CSM_BUY;
+   if((flags&BBMA_CSM_SELL)    !=0 && !BBMASeriesHasBefore(pf,pt,t,window,BBMA_CSAK_SELL)) flags&=~BBMA_CSM_SELL;
+   if((flags&BBMA_EXTREME_BUY) !=0 && !BBMASeriesHasBefore(pf,pt,t,window,BBMA_MHV_BUY))   flags&=~BBMA_EXTREME_BUY;
+   if((flags&BBMA_EXTREME_SELL)!=0 && !BBMASeriesHasBefore(pf,pt,t,window,BBMA_MHV_SELL))  flags&=~BBMA_EXTREME_SELL;
+   return(flags);
+  }
+
 #endif
