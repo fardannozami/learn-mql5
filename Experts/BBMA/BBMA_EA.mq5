@@ -49,11 +49,21 @@ input bool   InpUseHours   = false;
 input int    InpStartHour  = 7;
 input int    InpEndHour    = 21;
 
+input group "Dynamic exit (signal-based SL/TP)"
+input bool InpUseSignalExit = true;            // close on an opposite BBMA signal
+input ENUM_TIMEFRAMES InpExitLowerTF = PERIOD_M5; // lower TF for the CSM exit
+input int  InpExitCsmCount  = 2;               // opposite CSM candles on lower TF to exit
+input int  InpExitCsmWindow = 6;               // bars back on lower TF to count them
+input bool InpUseHardSL     = true;            // keep a protective swing SL (backstop)
+input bool InpUseFixedTP    = false;           // also keep the RiskRatio TP target
+
 //--- handles per timeframe
-BBMAHandles  g_hEnt, g_hMid, g_hHtf;
+BBMAHandles  g_hEnt, g_hMid, g_hHtf, g_hExit;
 BBMASettings g_set;
 CTrade       g_trade;
 datetime     g_lastBar = 0;
+datetime     g_lastExitEnt = 0;   // last entry-TF bar checked for exit
+datetime     g_lastExitLow = 0;   // last lower-TF bar checked for exit
 
 #define SCAN_BARS 1200
 
@@ -72,6 +82,8 @@ int OnInit()
       !BBMACreateHandles(_Symbol,InpMidTF, g_hMid) ||
       !BBMACreateHandles(_Symbol,InpHtfTF, g_hHtf))
      { Print("BBMA_EA: failed to create indicator handles"); return(INIT_FAILED); }
+   if(InpUseSignalExit && !BBMACreateHandles(_Symbol,InpExitLowerTF,g_hExit))
+     { Print("BBMA_EA: failed to create lower-TF exit handles"); return(INIT_FAILED); }
 
    g_trade.SetExpertMagicNumber(InpMagic);
    g_trade.SetDeviationInPoints(InpSlippagePts);
@@ -84,6 +96,7 @@ void OnDeinit(const int reason)
    BBMAReleaseHandles(g_hEnt);
    BBMAReleaseHandles(g_hMid);
    BBMAReleaseHandles(g_hHtf);
+   if(InpUseSignalExit) BBMAReleaseHandles(g_hExit);
   }
 
 //+------------------------------------------------------------------+
@@ -189,9 +202,88 @@ bool HoursOk()
    return(t.hour>=InpStartHour || t.hour<InpEndHour); // wraps midnight
   }
 
+//--- our position direction: +1 long, -1 short, 0 none
+int GetPositionDir()
+  {
+   for(int i=PositionsTotal()-1;i>=0;i--)
+     {
+      ulong tk=PositionGetTicket(i);
+      if(tk==0) continue;
+      if(PositionGetString(POSITION_SYMBOL)==_Symbol &&
+         PositionGetInteger(POSITION_MAGIC)==InpMagic)
+         return((PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?+1:-1);
+     }
+   return(0);
+  }
+
+void CloseOurPositions(const string why)
+  {
+   for(int i=PositionsTotal()-1;i>=0;i--)
+     {
+      ulong tk=PositionGetTicket(i);
+      if(tk==0) continue;
+      if(PositionGetString(POSITION_SYMBOL)==_Symbol &&
+         PositionGetInteger(POSITION_MAGIC)==InpMagic)
+        {
+         if(!g_trade.PositionClose(tk))
+            PrintFormat("BBMA_EA: close failed #%I64u ret=%d %s",tk,
+                        g_trade.ResultRetcode(),g_trade.ResultRetcodeDescription());
+         else
+            PrintFormat("BBMA_EA: signal exit (%s)",why);
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Dynamic SL/TP: close an open trade when BBMA reverses --          |
+//|  - an opposite CSAK closes on the entry TF, or                    |
+//|  - >= InpExitCsmCount opposite CSM candles print on the lower TF  |
+//|    within InpExitCsmWindow bars.                                  |
+//+------------------------------------------------------------------+
+void ManageExit()
+  {
+   int pdir=GetPositionDir();
+   if(pdir==0) return;
+
+   bool newEnt=false, newLow=false;
+   datetime te=iTime(_Symbol,InpEntryTF,0);
+   datetime tl=iTime(_Symbol,InpExitLowerTF,0);
+   if(te!=g_lastExitEnt){ g_lastExitEnt=te; newEnt=true; }
+   if(tl!=g_lastExitLow){ g_lastExitLow=tl; newLow=true; }
+   if(!newEnt && !newLow) return;   // nothing new closed yet
+
+   //--- opposite CSAK on the entry TF (just-closed bar)
+   if(newEnt)
+     {
+      int fe[];
+      if(ScanTF(InpEntryTF,g_hEnt,fe)>0)
+        {
+         int oppCsak=(pdir>0)?BBMA_CSAK_SELL:BBMA_CSAK_BUY;
+         if((fe[0]&oppCsak)!=0){ CloseOurPositions("opposite CSAK on entry TF"); return; }
+        }
+     }
+
+   //--- opposite CSM cluster on the lower TF
+   if(newLow)
+     {
+      int fl[];
+      if(ScanTF(InpExitLowerTF,g_hExit,fl)>0)
+        {
+         int oppCsm=(pdir>0)?BBMA_CSM_SELL:BBMA_CSM_BUY;
+         int w=MathMin(InpExitCsmWindow,ArraySize(fl));
+         int c=0;
+         for(int i=0;i<w;i++) if((fl[i]&oppCsm)!=0) c++;
+         if(c>=InpExitCsmCount){ CloseOurPositions("opposite CSM on lower TF"); return; }
+        }
+     }
+  }
+
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   //--- dynamic exit first, so a reversal can close before anything else
+   if(InpUseSignalExit) ManageExit();
+
    //--- act once per entry-TF bar
    datetime t=iTime(_Symbol,InpEntryTF,0);
    if(t==g_lastBar) return;
@@ -255,11 +347,14 @@ void OnTick()
       if(slDist<=buf) return;
       tp=entry-InpRiskRatio*slDist;
      }
-   sl=NormalizeDouble(sl,dg); tp=NormalizeDouble(tp,dg);
+   //--- with dynamic exit on, the swing SL is only a backstop and the
+   //    fixed TP is off by default (let the reversal signal take profit).
+   double slOut=(InpUseHardSL ? NormalizeDouble(sl,dg) : 0.0);
+   double tpOut=(InpUseFixedTP ? NormalizeDouble(tp,dg) : 0.0);
    double lot=CalcLot(slDist);
 
-   bool ok = (dir>0) ? g_trade.Buy(lot,_Symbol,0.0,sl,tp,"BBMA Re-entry")
-                     : g_trade.Sell(lot,_Symbol,0.0,sl,tp,"BBMA Re-entry");
+   bool ok = (dir>0) ? g_trade.Buy(lot,_Symbol,0.0,slOut,tpOut,"BBMA Re-entry")
+                     : g_trade.Sell(lot,_Symbol,0.0,slOut,tpOut,"BBMA Re-entry");
    if(!ok)
       PrintFormat("BBMA_EA: order failed dir=%d ret=%d %s",
                   dir,g_trade.ResultRetcode(),g_trade.ResultRetcodeDescription());
