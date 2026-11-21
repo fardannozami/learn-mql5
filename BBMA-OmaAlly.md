@@ -246,8 +246,14 @@ All signals are inputs you can toggle, and the thresholds (`SeqLookback`, `Reent
 3. Note any signal that is missing, wrong or extra (bar time + timeframe), then adjust the inputs or the engine.
 4. Repeat until the labels match your own reading of the chart.
 
-### Step 2 – Multi-timeframe dashboard row
-Show the latest signal for XAUUSD on W1, D1, H4, H1, M15 and M5 (like one row of the Analyzer Dashboard), and highlight Full Setup, REE, RRE, RRM, REM and Diamond when they line up.
+### Step 2 – Multi-timeframe dashboard row — `Indicators/BBMA/BBMA_Scanner.mq5` (**Done**)
+A small on-chart panel for XAUUSD:
+- **Sig row:** the latest signal on W1, D1, H4, H1, M15, M5 (green = buy, red = sell, grey = none).
+- **Setups:** each TF group (W1-D1-H4, D1-H4-H1, H4-H1-M15, H1-M15-M5) shows its best matching named setup (Diamond / RRE / RRM / REE / REM / Full) and direction, or `-`.
+- Updates on a timer (default 3 s). Inputs match the indicator's rule settings, plus panel position/size.
+- Attach it to any XAUUSD chart; it scans all six timeframes itself, so each needs downloaded history.
+
+> The Full-Setup / named-setup detection is approximate (nearest signal per category within a window), meant as a study aid to compare against the guidebook's dashboard, not an exact clone of the paid EA.
 
 ### Step 3 – EA
 Only after the indicator matches your manual reading:
